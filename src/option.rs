@@ -401,16 +401,20 @@ pub struct BamReadOptions {
     /// Optional list of BAM tag names to include as columns (e.g., ["NM", "AS", "MD"])
     #[pyo3(get, set)]
     pub tag_fields: Option<Vec<String>>,
+    /// Number of records to sample for inferring optional tag types. 0 = disabled.
+    #[pyo3(get, set)]
+    pub sample_size: usize,
 }
 
 #[pymethods]
 impl BamReadOptions {
     #[new]
-    #[pyo3(signature = (object_storage_options=None, zero_based=true, tag_fields=None))]
+    #[pyo3(signature = (object_storage_options=None, zero_based=true, tag_fields=None, sample_size=0))]
     pub fn new(
         object_storage_options: Option<PyObjectStorageOptions>,
         zero_based: bool,
         tag_fields: Option<Vec<String>>,
+        sample_size: usize,
     ) -> Self {
         BamReadOptions {
             object_storage_options: pyobject_storage_options_to_object_storage_options(
@@ -418,6 +422,7 @@ impl BamReadOptions {
             ),
             zero_based,
             tag_fields,
+            sample_size,
         }
     }
     #[staticmethod]
@@ -434,6 +439,7 @@ impl BamReadOptions {
             }),
             zero_based: true,
             tag_fields: None,
+            sample_size: 0,
         }
     }
 }

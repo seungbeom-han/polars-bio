@@ -568,6 +568,7 @@ class IOOperations:
         projection_pushdown: bool = True,
         predicate_pushdown: bool = True,
         use_zero_based: Optional[bool] = None,
+        sample_size: int = 0,
     ) -> pl.DataFrame:
         """
         Read a BAM file into a DataFrame.
@@ -590,6 +591,7 @@ class IOOperations:
             projection_pushdown: Enable column projection pushdown to optimize query performance by only reading the necessary columns at the DataFusion level.
             predicate_pushdown: Enable predicate pushdown using index files (BAI/CSI) for efficient region-based filtering. Index files are auto-discovered (e.g., `file.bam.bai`). Only simple predicates are pushed down (equality, comparisons, IN); complex predicates like `.str.contains()` or OR logic are filtered client-side. Correctness is always guaranteed.
             use_zero_based: If True, output 0-based half-open coordinates. If False, output 1-based closed coordinates. If None (default), uses the global configuration `datafusion.bio.coordinate_system_zero_based`.
+            sample_size: Number of records to sample to infer optional tag types. 0 disables inference (current behavior).
 
         !!! note
             By default, coordinates are output in **1-based closed** format. Use `use_zero_based=True` or set `pb.set_option(pb.POLARS_BIO_COORDINATE_SYSTEM_ZERO_BASED, True)` for 0-based half-open coordinates.
@@ -606,6 +608,7 @@ class IOOperations:
             projection_pushdown,
             predicate_pushdown,
             use_zero_based,
+            sample_size,
         )
         # Get metadata before collecting (polars-config-meta doesn't preserve through collect)
         zero_based = lf.config_meta.get_metadata().get("coordinate_system_zero_based")
@@ -628,6 +631,7 @@ class IOOperations:
         projection_pushdown: bool = True,
         predicate_pushdown: bool = True,
         use_zero_based: Optional[bool] = None,
+        sample_size: int = 0,
     ) -> pl.LazyFrame:
         """
         Lazily read a BAM file into a LazyFrame.
@@ -650,6 +654,7 @@ class IOOperations:
             projection_pushdown: Enable column projection pushdown to optimize query performance by only reading the necessary columns at the DataFusion level.
             predicate_pushdown: Enable predicate pushdown using index files (BAI/CSI) for efficient region-based filtering. Index files are auto-discovered (e.g., `file.bam.bai`). Only simple predicates are pushed down (equality, comparisons, IN); complex predicates like `.str.contains()` or OR logic are filtered client-side. Correctness is always guaranteed.
             use_zero_based: If True, output 0-based half-open coordinates. If False, output 1-based closed coordinates. If None (default), uses the global configuration `datafusion.bio.coordinate_system_zero_based`.
+            sample_size: Number of records to sample to infer optional tag types. 0 disables inference (current behavior).
 
         !!! note
             By default, coordinates are output in **1-based closed** format. Use `use_zero_based=True` or set `pb.set_option(pb.POLARS_BIO_COORDINATE_SYSTEM_ZERO_BASED, True)` for 0-based half-open coordinates.
@@ -669,6 +674,7 @@ class IOOperations:
             object_storage_options=object_storage_options,
             zero_based=zero_based,
             tag_fields=tag_fields,
+            sample_size=sample_size,
         )
         read_options = ReadOptions(bam_read_options=bam_read_options)
         return _read_file(
@@ -1727,6 +1733,7 @@ class IOOperations:
         tag_fields: Union[list[str], None] = None,
         projection_pushdown: bool = True,
         use_zero_based: Optional[bool] = None,
+        sample_size: int = 0,
     ) -> pl.DataFrame:
         """
         Read a SAM file into a DataFrame.
@@ -1743,6 +1750,7 @@ class IOOperations:
             use_zero_based: If True, output 0-based half-open coordinates.
                 If False, output 1-based closed coordinates.
                 If None (default), uses the global configuration.
+            sample_size: Number of records to sample to infer optional tag types. 0 disables inference (current behavior).
 
         !!! note
             By default, coordinates are output in **1-based closed** format.
@@ -1752,6 +1760,7 @@ class IOOperations:
             tag_fields,
             projection_pushdown,
             use_zero_based,
+            sample_size,
         )
         zero_based = lf.config_meta.get_metadata().get("coordinate_system_zero_based")
         df = lf.collect()
@@ -1765,6 +1774,7 @@ class IOOperations:
         tag_fields: Union[list[str], None] = None,
         projection_pushdown: bool = True,
         use_zero_based: Optional[bool] = None,
+        sample_size: int = 0,
     ) -> pl.LazyFrame:
         """
         Lazily read a SAM file into a LazyFrame.
@@ -1781,6 +1791,7 @@ class IOOperations:
             use_zero_based: If True, output 0-based half-open coordinates.
                 If False, output 1-based closed coordinates.
                 If None (default), uses the global configuration.
+            sample_size: Number of records to sample to infer optional tag types. 0 disables inference (current behavior).
 
         !!! note
             By default, coordinates are output in **1-based closed** format.
@@ -1789,6 +1800,7 @@ class IOOperations:
         bam_read_options = BamReadOptions(
             zero_based=zero_based,
             tag_fields=tag_fields,
+            sample_size=sample_size,
         )
         read_options = ReadOptions(bam_read_options=bam_read_options)
         return _read_file(

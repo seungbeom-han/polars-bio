@@ -361,15 +361,28 @@ pub(crate) async fn register_table(
                 "Registering {} table {} with options: {:?}",
                 format, table_name, bam_read_options
             );
-            let table_provider = BamTableProvider::new(
-                path.to_string(),
-                bam_read_options.object_storage_options.clone(),
-                bam_read_options.zero_based,
-                bam_read_options.tag_fields.clone(),
-                false,
-            )
-            .await
-            .unwrap();
+            let table_provider = if bam_read_options.sample_size > 0 {
+                BamTableProvider::try_new_with_inferred_schema(
+                    path.to_string(),
+                    bam_read_options.object_storage_options.clone(),
+                    bam_read_options.zero_based,
+                    bam_read_options.tag_fields.clone(),
+                    Some(bam_read_options.sample_size),
+                    false,
+                )
+                .await
+                .unwrap()
+            } else {
+                BamTableProvider::new(
+                    path.to_string(),
+                    bam_read_options.object_storage_options.clone(),
+                    bam_read_options.zero_based,
+                    bam_read_options.tag_fields.clone(),
+                    false,
+                )
+                .await
+                .unwrap()
+            };
             ctx.register_table(table_name, Arc::new(table_provider))
                 .expect("Failed to register BAM/SAM table");
         },
