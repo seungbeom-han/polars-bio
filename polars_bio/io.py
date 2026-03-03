@@ -108,6 +108,12 @@ SCHEMAS = {
 }
 
 
+def _quote_sql_identifier(identifier: str) -> str:
+    """Quote a SQL identifier for DataFusion SQL text."""
+    escaped = str(identifier).replace('"', '""')
+    return f'"{escaped}"'
+
+
 class IOOperations:
     @staticmethod
     def read_fasta(
@@ -245,6 +251,7 @@ class IOOperations:
         projection_pushdown: bool = True,
         predicate_pushdown: bool = True,
         use_zero_based: Optional[bool] = None,
+        samples: Union[list[str], None] = None,
     ) -> pl.DataFrame:
         """
         Read a VCF file into a DataFrame.
@@ -257,8 +264,9 @@ class IOOperations:
 
         Parameters:
             path: The path to the VCF file.
-            info_fields: List of INFO field names to include. If *None*, all INFO fields will be detected automatically from the VCF header. Use this to limit fields for better performance.
-            format_fields: List of FORMAT field names to include (per-sample genotype data). If *None*, all FORMAT fields will be automatically detected from the VCF header. Column naming depends on the number of samples: for **single-sample** VCFs, columns are named directly by the FORMAT field (e.g., `GT`, `DP`); for **multi-sample** VCFs, columns are named `{sample_name}_{format_field}` (e.g., `NA12878_GT`, `NA12879_DP`). The GT field is always converted to string with `/` (unphased) or `|` (phased) separator.
+            info_fields: List of INFO field names to include. If *None*, all INFO fields from the VCF header are included by default. Use this to limit fields for better performance.
+            format_fields: List of FORMAT field names to include (per-sample genotype data). If *None*, all FORMAT fields are included by default. For **single-sample** VCFs, FORMAT fields are top-level columns (e.g., `GT`, `DP`). For **multi-sample** VCFs, FORMAT data is exposed as a nested `genotypes` column (`list<struct<sample_id, values>>`).
+            samples: Optional list of sample names to include from the VCF header. Matching is exact and case-sensitive. Missing sample names are skipped with a warning. The output follows the requested sample order.
             chunk_size: The size in MB of a chunk when reading from an object store. The default is 8 MB. For large scale operations, it is recommended to increase this value to 64.
             concurrent_fetches: [GCS] The number of concurrent fetches when reading from an object store. The default is 1. For large scale operations, it is recommended to increase this value to 8 or even more.
             allow_anonymous: [GCS, AWS S3] Whether to allow anonymous access to object storage.
@@ -284,7 +292,7 @@ class IOOperations:
                 format_fields=["GT", "DP", "GQ"]  # FORMAT fields
             )
 
-            # Single-sample VCF: FORMAT columns named directly (GT, DP, GQ)
+            # Single-sample VCF: FORMAT fields are top-level columns (GT, DP, GQ)
             print(df.select(["chrom", "start", "ref", "alt", "END", "GT", "DP", "GQ"]))
             # Output:
             # shape: (10, 8)
@@ -296,25 +304,26 @@ class IOOperations:
             # │ 1     ┆ 10015 ┆ A   ┆ .   ┆ null ┆ 0/0 ┆ 17  ┆ 35  │
             # └───────┴───────┴─────┴─────┴──────┴─────┴─────┴─────┘
 
-            # Multi-sample VCF: FORMAT columns named {sample}_{field}
+            # Multi-sample VCF: FORMAT data is nested in "genotypes"
             df = pb.read_vcf("multisample.vcf", format_fields=["GT", "DP"])
-            print(df.select(["chrom", "start", "NA12878_GT", "NA12878_DP", "NA12879_GT"]))
+            print(df.select(["chrom", "start", "genotypes"]))
             ```
         """
         lf = IOOperations.scan_vcf(
-            path,
-            info_fields,
-            format_fields,
-            chunk_size,
-            concurrent_fetches,
-            allow_anonymous,
-            enable_request_payer,
-            max_retries,
-            timeout,
-            compression_type,
-            projection_pushdown,
-            predicate_pushdown,
-            use_zero_based,
+            path=path,
+            info_fields=info_fields,
+            format_fields=format_fields,
+            chunk_size=chunk_size,
+            concurrent_fetches=concurrent_fetches,
+            allow_anonymous=allow_anonymous,
+            enable_request_payer=enable_request_payer,
+            max_retries=max_retries,
+            timeout=timeout,
+            compression_type=compression_type,
+            projection_pushdown=projection_pushdown,
+            predicate_pushdown=predicate_pushdown,
+            use_zero_based=use_zero_based,
+            samples=samples,
         )
         # Get metadata before collecting (polars-config-meta doesn't preserve through collect)
         zero_based = lf.config_meta.get_metadata().get("coordinate_system_zero_based")
@@ -339,6 +348,7 @@ class IOOperations:
         projection_pushdown: bool = True,
         predicate_pushdown: bool = True,
         use_zero_based: Optional[bool] = None,
+        samples: Union[list[str], None] = None,
     ) -> pl.LazyFrame:
         """
         Lazily read a VCF file into a LazyFrame.
@@ -351,8 +361,9 @@ class IOOperations:
 
         Parameters:
             path: The path to the VCF file.
-            info_fields: List of INFO field names to include. If *None*, all INFO fields will be detected automatically from the VCF header. Use this to limit fields for better performance.
-            format_fields: List of FORMAT field names to include (per-sample genotype data). If *None*, all FORMAT fields will be automatically detected from the VCF header. Column naming depends on the number of samples: for **single-sample** VCFs, columns are named directly by the FORMAT field (e.g., `GT`, `DP`); for **multi-sample** VCFs, columns are named `{sample_name}_{format_field}` (e.g., `NA12878_GT`, `NA12879_DP`). The GT field is always converted to string with `/` (unphased) or `|` (phased) separator.
+            info_fields: List of INFO field names to include. If *None*, all INFO fields from the VCF header are included by default. Use this to limit fields for better performance.
+            format_fields: List of FORMAT field names to include (per-sample genotype data). If *None*, all FORMAT fields are included by default. For **single-sample** VCFs, FORMAT fields are top-level columns (e.g., `GT`, `DP`). For **multi-sample** VCFs, FORMAT data is exposed as a nested `genotypes` column (`list<struct<sample_id, values>>`).
+            samples: Optional list of sample names to include from the VCF header. Matching is exact and case-sensitive. Missing sample names are skipped with a warning. The output follows the requested sample order.
             chunk_size: The size in MB of a chunk when reading from an object store. The default is 8 MB. For large scale operations, it is recommended to increase this value to 64.
             concurrent_fetches: [GCS] The number of concurrent fetches when reading from an object store. The default is 1. For large scale operations, it is recommended to increase this value to 8 or even more.
             allow_anonymous: [GCS, AWS S3] Whether to allow anonymous access to object storage.
@@ -383,8 +394,8 @@ class IOOperations:
                 ["chrom", "start", "ref", "alt", "GT", "DP", "GQ"]
             ).collect()
 
-            # Single-sample VCF: FORMAT columns named directly (GT, DP, GQ)
-            # Multi-sample VCF: FORMAT columns named {sample}_{field}
+            # Single-sample VCF: FORMAT fields are top-level columns (GT, DP, GQ)
+            # Multi-sample VCF: FORMAT data is nested in "genotypes"
             ```
         """
         object_storage_options = PyObjectStorageOptions(
@@ -397,33 +408,14 @@ class IOOperations:
             compression_type=compression_type,
         )
 
-        # Use provided info_fields or autodetect from VCF header
-        if info_fields is not None:
-            initial_info_fields = info_fields
-        else:
-            # Get all info fields from VCF header for proper projection pushdown
-            all_info_fields = None
-            try:
-                vcf_schema_df = IOOperations.describe_vcf(
-                    path,
-                    allow_anonymous=allow_anonymous,
-                    enable_request_payer=enable_request_payer,
-                    compression_type=compression_type,
-                )
-                # Use column name 'name' not 'id' based on the schema output
-                all_info_fields = vcf_schema_df.select("name").to_series().to_list()
-            except Exception:
-                # Fallback to None if unable to get info fields
-                all_info_fields = None
-
-            # Always start with all info fields to establish full schema
-            # The callback will re-register with only requested info fields for optimization
-            initial_info_fields = all_info_fields
+        # Upstream VCF reader projects all INFO fields by default when info_fields is None.
+        initial_info_fields = info_fields
 
         zero_based = _resolve_zero_based(use_zero_based)
         vcf_read_options = VcfReadOptions(
             info_fields=initial_info_fields,
             format_fields=format_fields,
+            samples=samples,
             object_storage_options=object_storage_options,
             zero_based=zero_based,
         )
@@ -2179,10 +2171,11 @@ def _apply_combined_pushdown_via_sql(
     # This keeps us in pure SQL mode for maximum performance
 
     # Construct optimized SQL query
+    quoted_table = _quote_sql_identifier(table_name)
     if where_clause:
-        sql = f"SELECT {select_clause} FROM {table_name} WHERE {where_clause}"
+        sql = f"SELECT {select_clause} FROM {quoted_table} WHERE {where_clause}"
     else:
-        sql = f"SELECT {select_clause} FROM {table_name}"
+        sql = f"SELECT {select_clause} FROM {quoted_table}"
 
     # Execute with DataFusion - this leverages the proven 4x+ optimization
     return py_read_sql(ctx, sql)
@@ -2345,9 +2338,11 @@ def _lazy_scan(
         n_rows: Union[int, None],
         _batch_size: Union[int, None],
     ) -> Iterator[pl.DataFrame]:
-        from polars_bio.polars_bio import py_read_sql
+        from polars_bio.polars_bio import py_read_table, py_register_table
 
         from .context import ctx as _ctx
+
+        table_refreshed = False
 
         # === GFF-only pre-step ===
         # GFF's "attributes" column contains semi-structured key=value pairs that
@@ -2359,7 +2354,6 @@ def _lazy_scan(
         if input_format == InputFormat.Gff and file_path is not None:
             from polars_bio.polars_bio import GffReadOptions, PyObjectStorageOptions
             from polars_bio.polars_bio import ReadOptions as _ReadOptions
-            from polars_bio.polars_bio import py_register_table
 
             requested_cols = (
                 _extract_column_names_from_expr(with_columns)
@@ -2417,9 +2411,10 @@ def _lazy_scan(
 
             if projection_pushdown and requested_cols:
                 table_obj = py_register_table(
-                    _ctx, file_path, None, InputFormat.Gff, ropts
+                    _ctx, file_path, table_name, InputFormat.Gff, ropts
                 )
                 table_to_query = table_obj.name
+                table_refreshed = True
 
         # === Unified path for ALL formats ===
 
@@ -2427,7 +2422,17 @@ def _lazy_scan(
         if df_for_stream is not None:
             query_df = df_for_stream
         else:
-            query_df = py_read_sql(_ctx, f"SELECT * FROM {table_to_query}")
+            # Re-register file-backed sources on each execution so every collect()
+            # sees a fresh provider state for this LazyFrame.
+            if (
+                file_path is not None
+                and not table_refreshed
+                and table_to_query is not None
+            ):
+                py_register_table(
+                    _ctx, file_path, table_to_query, input_format, read_options
+                )
+            query_df = py_read_table(_ctx, table_to_query)
 
         # 2. Predicate pushdown via DataFusion Expr API
         #    Flow: Polars Expr → DataFusion Expr (validates types) → SQL string
@@ -2904,9 +2909,13 @@ class GffLazyFrameWrapper:
                 # but at least warn that filtering may not work correctly
                 pass
 
+            import uuid
+
             select_clause = ", ".join([f'"{c}"' for c in columns])
-            view_name = f"{table.name}_proj"
-            sql_query = f"SELECT {select_clause} FROM {table.name}"
+            # Keep generated view identifiers SQL-safe regardless of source table name.
+            view_name = f"_pb_gff_proj_{uuid.uuid4().hex}"
+            quoted_table = _quote_sql_identifier(table.name)
+            sql_query = f"SELECT {select_clause} FROM {quoted_table}"
 
             if where_clause:
                 sql_query += f" WHERE {where_clause}"

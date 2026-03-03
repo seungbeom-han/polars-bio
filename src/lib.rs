@@ -291,11 +291,9 @@ fn py_read_table(
     py.allow_threads(|| {
         let rt = Runtime::new()?;
         let ctx = &py_ctx.ctx;
-        let df = rt
-            .block_on(ctx.sql(&format!("SELECT * FROM {}", table_name)))
-            .map_err(|e| {
-                PyValueError::new_err(format!("Failed to read table '{}': {}", table_name, e))
-            })?;
+        let df = rt.block_on(ctx.table(&table_name)).map_err(|e| {
+            PyValueError::new_err(format!("Failed to read table '{}': {}", table_name, e))
+        })?;
         Ok(PyDataFrame::new(df))
     })
 }
@@ -405,6 +403,10 @@ fn py_describe_vcf(
     })
 }
 
+fn quote_sql_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
 #[pyfunction]
 #[pyo3(signature = (py_ctx, name, query))]
 fn py_register_view(
@@ -416,10 +418,12 @@ fn py_register_view(
     py.allow_threads(|| {
         let rt = Runtime::new()?;
         let ctx = &py_ctx.ctx;
-        rt.block_on(ctx.sql(&format!("CREATE OR REPLACE VIEW {} AS {}", name, query)))
-            .map_err(|e| {
-                PyValueError::new_err(format!("Failed to create view '{}': {}", name, e))
-            })?;
+        let quoted_name = quote_sql_identifier(&name);
+        rt.block_on(ctx.sql(&format!(
+            "CREATE OR REPLACE VIEW {} AS {}",
+            quoted_name, query
+        )))
+        .map_err(|e| PyValueError::new_err(format!("Failed to create view '{}': {}", name, e)))?;
         Ok(())
     })
 }
@@ -479,6 +483,72 @@ fn py_write_from_sql(
     })
 }
 
+/// Build a VCF multisample `genotypes` target type where nested string fields
+/// use Utf8 (required by the current VCF writer implementation).
+fn vcf_genotypes_utf8_type(
+    data_type: &datafusion::arrow::datatypes::DataType,
+) -> Option<datafusion::arrow::datatypes::DataType> {
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use std::sync::Arc;
+
+    let (item_field, is_large_list) = match data_type {
+        DataType::List(item) => (item, false),
+        DataType::LargeList(item) => (item, true),
+        _ => return None,
+    };
+
+    let genotype_fields = match item_field.data_type() {
+        DataType::Struct(fields) => fields,
+        _ => return None,
+    };
+
+    let field_with_type_preserving_meta = |source: &Arc<Field>, target_type: DataType| {
+        let mut new_field = Field::new(source.name(), target_type, source.is_nullable());
+        let source_meta = source.metadata();
+        if !source_meta.is_empty() {
+            new_field = new_field.with_metadata(source_meta.clone());
+        }
+        Arc::new(new_field)
+    };
+
+    let mut new_genotype_fields: Vec<Arc<Field>> = Vec::with_capacity(genotype_fields.len());
+
+    for field in genotype_fields.iter() {
+        if field.name() == "sample_id" {
+            new_genotype_fields.push(field_with_type_preserving_meta(field, DataType::Utf8));
+            continue;
+        }
+
+        if field.name() == "values" {
+            if let DataType::Struct(value_fields) = field.data_type() {
+                let mut new_value_fields: Vec<Arc<Field>> = Vec::with_capacity(value_fields.len());
+                for value_field in value_fields.iter() {
+                    let value_type = match value_field.data_type() {
+                        DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => DataType::Utf8,
+                        other => other.clone(),
+                    };
+                    new_value_fields.push(field_with_type_preserving_meta(value_field, value_type));
+                }
+
+                let values_type = DataType::Struct(new_value_fields.into());
+                new_genotype_fields.push(field_with_type_preserving_meta(field, values_type));
+                continue;
+            }
+        }
+
+        new_genotype_fields.push(Arc::new(field.as_ref().clone()));
+    }
+
+    let item_type = DataType::Struct(new_genotype_fields.into());
+    let new_item_field = field_with_type_preserving_meta(item_field, item_type);
+
+    if is_large_list {
+        Some(DataType::LargeList(new_item_field))
+    } else {
+        Some(DataType::List(new_item_field))
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (py_ctx, df, path, output_format, write_options=None))]
 fn py_write_table(
@@ -534,6 +604,18 @@ fn py_write_table(
                 // Use qualified column name with proper quoting for special characters
                 // Format: table."column" to handle uppercase/special chars
                 let qualified_name = format!("{}.\"{}\"", temp_table_name, field.name());
+
+                // VCF multisample writer currently expects nested `genotypes` string fields
+                // as Utf8 (not LargeUtf8/Utf8View). Cast the full nested type explicitly.
+                if matches!(output_format, OutputFormat::Vcf) && field.name() == "genotypes" {
+                    if let Some(target_type) = vcf_genotypes_utf8_type(field.data_type()) {
+                        let expr =
+                            Expr::Cast(Cast::new(Box::new(col(qualified_name)), target_type))
+                                .alias(field.name());
+                        select_exprs.push(expr);
+                        continue;
+                    }
+                }
 
                 match field.data_type() {
                     DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
